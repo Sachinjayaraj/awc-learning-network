@@ -1,0 +1,53 @@
+name: Deploy Flask App
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H your-server.com >> ~/.ssh/known_hosts
+
+    - name: Copy files to EC2
+      run: |
+        rsync -avz --delete \
+          --exclude '.git' \
+          --exclude '__pycache__' \
+          -e "ssh -i ~/.ssh/id_rsa" \
+          ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/flask-hello
+          .
+
+    - name: install and start flask app (port 8000)
+      run: |
+        ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          cd /var/www/flask-hello
+
+          #create venv if missing
+          if [ ! -d "venv" ]; then
+          python3 -m venv venv
+          fi
+          
+          #install dependencies 
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install -r requirements.txt
+          
+          #stop existing gunicorn bound to port 8000 (if any)
+          pkill -f "gunicorn.*:8000" || true
+
+          #start gunicorn on port 8000
+          nohup ./venv/bin/gunicorn -b 0.0.0:8000 app:app > app.log 2>&1 &
+          echo " deployed and started flask app on port 8000"
+        EOF
+
